@@ -1,5 +1,6 @@
 package com.example.ui
 
+import com.example.BuildConfig
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -37,8 +38,8 @@ fun SignUpScreen(
     val focusManager = LocalFocusManager.current
     var email by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
-    var useCloudServer by remember { mutableStateOf(false) }
-    var cloudServerUrl by remember { mutableStateOf("https://whatschat-backend.herokuapp.com") }
+    var useCloudServer by remember { mutableStateOf(true) }
+    var cloudServerUrl by remember { mutableStateOf(BuildConfig.DEFAULT_CLOUD_SERVER_URL) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isSuccess by remember { mutableStateOf(false) }

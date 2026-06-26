@@ -49,8 +49,26 @@ console.log('Connecting to MongoDB database...');
 mongoose.connect(MONGODB_URI)
   .then(() => console.log('Successfully connected to MongoDB Database!'))
   .catch((err) => {
-    console.error('MongoDB database connection error:', err.message);
-    console.log('Ensure MongoDB Compass or local MongoDB service is running, or check MONGODB_URI.');
+    console.error('=============================================================');
+    console.error('❌ MONGODB CONNECTION ERROR DETECTED:');
+    console.error('=============================================================');
+    console.error('Error details:', err.message);
+    
+    if (err.message.includes('ECONNREFUSED') || err.message.includes('querySrv') || err.message.includes('ENOTFOUND')) {
+      console.error('\n💡 REASON: DNS SRV Lookup Failure / Network Restriction');
+      console.error('This typically happens due to one of the following reasons:');
+      console.error('  1. IP Whitelisting is missing on MongoDB Atlas:');
+      console.error('     - Go to Atlas Console -> Security -> Network Access.');
+      console.error('     - Click "Add IP Address" and select "Allow Access From Anywhere" (0.0.0.0/0) or add your current server IP.');
+      console.error('  2. DNS Server Restriction:');
+      console.error('     - Your local DNS or internet provider cannot resolve MongoDB Atlas SRV addresses.');
+      console.error('     - Try changing your local DNS settings to Google DNS (8.8.8.8 and 8.8.4.4) or Cloudflare DNS (1.1.1.1).');
+      console.error('  3. Incomplete connection parameters:');
+      console.error('     - Ensure there are no spaces or special characters in your password that require URL encoding (e.g., encode "@" as "%40").');
+    } else {
+      console.error('\n💡 Please check if MongoDB Compass/Local service is active, or verify your MONGODB_URI in .env configuration.');
+    }
+    console.error('=============================================================');
   });
 
 // -------------------------------------------------------------

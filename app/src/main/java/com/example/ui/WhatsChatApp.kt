@@ -1,5 +1,6 @@
 package com.example.ui
 
+import com.example.BuildConfig
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -1190,7 +1191,7 @@ fun WebSyncTab(
                             value = editedCloudUrl,
                             onValueChange = { editedCloudUrl = it },
                             label = { Text("Production Server URL (e.g. Heroku)") },
-                            placeholder = { Text("https://whatschat-backend.herokuapp.com") },
+                            placeholder = { Text(BuildConfig.DEFAULT_CLOUD_SERVER_URL) },
                             singleLine = true,
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = WhatsGreen,

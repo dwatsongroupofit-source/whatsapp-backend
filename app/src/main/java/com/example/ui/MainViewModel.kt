@@ -1,5 +1,6 @@
 package com.example.ui
 
+import com.example.BuildConfig
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -50,10 +51,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val currentUsername = _currentUsername.asStateFlow()
 
     // Cloud connection states
-    private val _cloudServerUrl = MutableStateFlow(sharedPrefs.getString("cloud_server_url", "https://whatschat-backend.herokuapp.com") ?: "https://whatschat-backend.herokuapp.com")
+    private val _cloudServerUrl = MutableStateFlow(sharedPrefs.getString("cloud_server_url", BuildConfig.DEFAULT_CLOUD_SERVER_URL) ?: BuildConfig.DEFAULT_CLOUD_SERVER_URL)
     val cloudServerUrl = _cloudServerUrl.asStateFlow()
 
-    private val _cloudSyncEnabled = MutableStateFlow(sharedPrefs.getBoolean("cloud_sync_enabled", false))
+    private val _cloudSyncEnabled = MutableStateFlow(sharedPrefs.getBoolean("cloud_sync_enabled", true))
     val cloudSyncEnabled = _cloudSyncEnabled.asStateFlow()
 
     private val _cloudConnectionState = MutableStateFlow(CloudSocketManager.ConnectionState.DISCONNECTED)
