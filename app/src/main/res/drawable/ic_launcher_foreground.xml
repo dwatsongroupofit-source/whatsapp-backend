@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Beautiful Chat Speech Bubble -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,24C37.4,24 24,35.2 24,49C24,54.4 26.1,59.4 29.6,63.5L25,77C24.7,78 24.9,79.1 25.6,79.8C26.1,80.3 26.8,80.6 27.5,80.6C27.8,80.6 28.1,80.6 28.4,80.5L42.8,75.7C46.3,77.2 50.1,78 54,78C70.6,78 84,66.8 84,53C84,39.2 70.6,24 54,24Z" />
+    
+    <!-- Lock body inside bubble -->
+    <path
+        android:fillColor="#00A884"
+        android:pathData="M44,48h20v14H44z" />
+        
+    <!-- Lock shackle inside bubble -->
+    <path
+        android:strokeColor="#00A884"
+        android:strokeWidth="2.5"
+        android:fillColor="#00000000"
+        android:pathData="M48,48v-4c0-3.3 2.7-6 6-6s6,2.7 6,6v4" />
+</vector>

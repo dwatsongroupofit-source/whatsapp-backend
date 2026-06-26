@@ -1,0 +1,6 @@
+{
+  "name": "WhatsChat",
+  "description": "Secure chat application featuring end-to-end encryption, group messages, voice calling, status updates, biometric security, and a local web portal for synchronization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
