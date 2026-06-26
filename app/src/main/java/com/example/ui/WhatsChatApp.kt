@@ -11,6 +11,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -43,6 +46,10 @@ import com.example.sync.CloudSocketManager
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlinx.coroutines.delay
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.net.Uri
+import coil.compose.AsyncImage
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -281,7 +288,7 @@ fun MainTabsScreen(viewModel: MainViewModel) {
     val cloudSyncEnabled by viewModel.cloudSyncEnabled.collectAsStateWithLifecycle()
     val cloudConnectionState by viewModel.cloudConnectionState.collectAsStateWithLifecycle()
 
-    var showCreateGroupDialog by remember { mutableStateOf(false) }
+    var showStartChatDialog by remember { mutableStateOf(false) }
     var showCreateStatusDialog by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -335,12 +342,12 @@ fun MainTabsScreen(viewModel: MainViewModel) {
             when (selectedTab) {
                 0 -> {
                     FloatingActionButton(
-                        onClick = { showCreateGroupDialog = true },
+                        onClick = { showStartChatDialog = true },
                         containerColor = WhatsGreen,
                         contentColor = WhatsTealDark,
                         modifier = Modifier.testTag("fab_create_chat")
                     ) {
-                        Icon(Icons.Default.GroupAdd, contentDescription = "Create Group")
+                        Icon(Icons.Default.Chat, contentDescription = "New Chat")
                     }
                 }
                 1 -> {
@@ -425,55 +432,187 @@ fun MainTabsScreen(viewModel: MainViewModel) {
                     cloudConnectionState = cloudConnectionState,
                     onUpdateCloudSettings = { url, enabled ->
                         viewModel.updateCloudServerSettings(url, enabled)
+                    },
+                    notifyReceived = viewModel.notificationOnReceived.collectAsStateWithLifecycle().value,
+                    notifySent = viewModel.notificationOnSent.collectAsStateWithLifecycle().value,
+                    onUpdateNotificationSettings = { received, sent ->
+                        viewModel.updateNotificationSettings(received, sent)
                     }
                 )
             }
         }
     }
 
-    // Dialog: Create E2EE Group Chat
-    if (showCreateGroupDialog) {
-        var groupName by remember { mutableStateOf("") }
+    // Dialog: Create E2EE Chat (Direct or Group)
+    if (showStartChatDialog) {
+        var selectedSubTab by remember { mutableStateOf(0) } // 0 = Direct Chat, 1 = Group Chat
+        var contactUsername by remember { mutableStateOf("") }
+        var groupSubject by remember { mutableStateOf("") }
+        var isSubmitting by remember { mutableStateOf(false) }
+        var dialogError by remember { mutableStateOf<String?>(null) }
+
         AlertDialog(
-            onDismissRequest = { showCreateGroupDialog = false },
-            title = { Text("New E2EE Group", fontWeight = FontWeight.Bold, color = Color.White) },
+            onDismissRequest = { showStartChatDialog = false },
+            title = {
+                Text(
+                    text = "New Secure Chat",
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    fontSize = 20.sp
+                )
+            },
             text = {
                 Column {
-                    Text("Securely register multiple keys under an on-device generated group payload.", color = WhatsGrayText, fontSize = 13.sp)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = groupName,
-                        onValueChange = { groupName = it },
-                        label = { Text("Group Subject") },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = WhatsGreen,
-                            unfocusedBorderColor = WhatsGrayText,
-                            focusedLabelColor = WhatsGreen
-                        ),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("input_group_name")
-                    )
+                    // Custom Styled Segmented Control Tabs
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(WhatsBackground)
+                            .padding(4.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (selectedSubTab == 0) WhatsGreen else Color.Transparent)
+                                .clickable { 
+                                    selectedSubTab = 0
+                                    dialogError = null 
+                                }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Direct Chat",
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (selectedSubTab == 0) WhatsTealDark else Color.White,
+                                fontSize = 14.sp
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (selectedSubTab == 1) WhatsGreen else Color.Transparent)
+                                .clickable { 
+                                    selectedSubTab = 1
+                                    dialogError = null 
+                                }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Group Chat",
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (selectedSubTab == 1) WhatsTealDark else Color.White,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (selectedSubTab == 0) {
+                        Text(
+                            text = "Enter a registered username on your cloud network (e.g. wasii, bailal shah) to securely connect and sync E2EE keys.",
+                            color = WhatsGrayText,
+                            fontSize = 13.sp
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = contactUsername,
+                            onValueChange = { 
+                                contactUsername = it
+                                dialogError = null
+                            },
+                            label = { Text("Username") },
+                            placeholder = { Text("e.g. wasii") },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = WhatsGreen,
+                                unfocusedBorderColor = WhatsGrayText,
+                                focusedLabelColor = WhatsGreen
+                            ),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("input_direct_username")
+                        )
+                    } else {
+                        Text(
+                            text = "Register multiple keys under an on-device generated group payload.",
+                            color = WhatsGrayText,
+                            fontSize = 13.sp
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = groupSubject,
+                            onValueChange = { 
+                                groupSubject = it
+                                dialogError = null
+                            },
+                            label = { Text("Group Subject") },
+                            placeholder = { Text("e.g. Tech Group") },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = WhatsGreen,
+                                unfocusedBorderColor = WhatsGrayText,
+                                focusedLabelColor = WhatsGreen
+                            ),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("input_group_subject")
+                        )
+                    }
+
+                    if (dialogError != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(dialogError!!, color = Color.Red, fontSize = 12.sp)
+                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        if (groupName.isNotBlank()) {
+                        if (selectedSubTab == 0) {
+                            if (contactUsername.isBlank()) {
+                                dialogError = "Username cannot be empty."
+                                return@Button
+                            }
+                            isSubmitting = true
+                            viewModel.createDirectChat(contactUsername) { success, error ->
+                                isSubmitting = false
+                                if (success) {
+                                    showStartChatDialog = false
+                                } else {
+                                    dialogError = error ?: "Unknown error"
+                                }
+                            }
+                        } else {
+                            if (groupSubject.isBlank()) {
+                                dialogError = "Group subject cannot be empty."
+                                return@Button
+                            }
                             viewModel.sendMessage(
-                                chatId = "group1", // Using seeded demo E2EE group structure
-                                text = "Created Secure Group chat '$groupName'. Direct keys verified!"
+                                chatId = "group1",
+                                text = "Created Secure Group chat '$groupSubject'. Direct keys verified!"
                             )
-                            showCreateGroupDialog = false
+                            showStartChatDialog = false
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = WhatsGreen),
-                    modifier = Modifier.testTag("btn_confirm_group")
+                    enabled = !isSubmitting,
+                    modifier = Modifier.testTag("btn_confirm_new_chat")
                 ) {
-                    Text("Create", color = WhatsTealDark)
+                    if (isSubmitting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = WhatsTealDark,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text(if (selectedSubTab == 0) "Connect" else "Create", color = WhatsTealDark)
+                    }
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showCreateGroupDialog = false }) {
+                TextButton(onClick = { showStartChatDialog = false }) {
                     Text("Cancel", color = WhatsGreen)
                 }
             },
@@ -894,7 +1033,10 @@ fun WebSyncTab(
     cloudServerUrl: String,
     cloudSyncEnabled: Boolean,
     cloudConnectionState: CloudSocketManager.ConnectionState,
-    onUpdateCloudSettings: (String, Boolean) -> Unit
+    onUpdateCloudSettings: (String, Boolean) -> Unit,
+    notifyReceived: Boolean,
+    notifySent: Boolean,
+    onUpdateNotificationSettings: (Boolean, Boolean) -> Unit
 ) {
     val scrollState = rememberScrollState()
     var editedCloudUrl by remember { mutableStateOf(cloudServerUrl) }
@@ -1243,6 +1385,99 @@ fun WebSyncTab(
                 }
             }
         }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Notification Settings Box
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = WhatsCardDark)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Notifications, contentDescription = "Notifications", tint = WhatsGreen)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = "Notification Preferences",
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        fontSize = 16.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Toggle Received Notifications
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Incoming Message Alerts",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "Show notifications for decrypted incoming messages",
+                            color = WhatsGrayText,
+                            fontSize = 11.sp
+                        )
+                    }
+
+                    Switch(
+                        checked = notifyReceived,
+                        onCheckedChange = {
+                            onUpdateNotificationSettings(it, notifySent)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.Black,
+                            checkedTrackColor = WhatsGreen,
+                            uncheckedThumbColor = WhatsGrayText,
+                            uncheckedTrackColor = WhatsBackground
+                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Toggle Sent Notifications
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Outgoing Message Alerts",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "Show notifications for successfully sent messages",
+                            color = WhatsGrayText,
+                            fontSize = 11.sp
+                        )
+                    }
+
+                    Switch(
+                        checked = notifySent,
+                        onCheckedChange = {
+                            onUpdateNotificationSettings(notifyReceived, it)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.Black,
+                            checkedTrackColor = WhatsGreen,
+                            uncheckedThumbColor = WhatsGrayText,
+                            uncheckedTrackColor = WhatsBackground
+                        )
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1260,6 +1495,21 @@ fun ChatFeedScreen(
     val messages by viewModel.activeMessages.collectAsStateWithLifecycle()
     val allChats by viewModel.allChats.collectAsStateWithLifecycle()
     val chat = allChats.firstOrNull { it.id == chatId }
+
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            viewModel.sendMessage(
+                chatId = chatId,
+                text = "Sent secure encrypted photo from gallery 📷",
+                mediaUrl = uri.toString(),
+                mediaType = "image"
+            )
+        }
+    }
+
+    var showEmojiPicker by remember { mutableStateOf(false) }
 
     // Message inspection bottomsheet
     var selectedMessageForInspection by remember { mutableStateOf<MessageEntity?>(null) }
@@ -1394,18 +1644,33 @@ fun ChatFeedScreen(
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .height(140.dp)
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(Color.DarkGray)
+                                            .height(180.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(Color(0xFF1F2C34))
                                             .padding(bottom = 6.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Icon(
-                                            imageVector = if (msg.mediaType == "image") Icons.Default.Image else Icons.Default.Mic,
-                                            contentDescription = "Media attachment",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(36.dp)
-                                        )
+                                        if (msg.mediaType == "image") {
+                                            val modelToLoad = if (msg.mediaUrl == "photo_url") {
+                                                "https://picsum.photos/seed/${msg.id}/400/300"
+                                            } else {
+                                                msg.mediaUrl
+                                            }
+                                            AsyncImage(
+                                                model = modelToLoad,
+                                                contentDescription = "Image attachment",
+                                                modifier = Modifier.fillMaxSize(),
+                                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                                error = androidx.compose.ui.res.painterResource(android.R.drawable.ic_menu_gallery)
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Default.Mic,
+                                                contentDescription = "Media attachment",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(36.dp)
+                                            )
+                                        }
                                     }
                                 }
 
@@ -1450,20 +1715,53 @@ fun ChatFeedScreen(
                     .padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Media attachment triggers simulated photo or audio send
+                // Emoji Toggle Button
                 IconButton(
-                    onClick = {
-                        // Securely send simulated photo attachment
-                        viewModel.sendMessage(
-                            chatId = chatId,
-                            text = "Sent secure encrypted photo payload",
-                            mediaUrl = "photo_url",
-                            mediaType = "image"
-                        )
-                    },
-                    modifier = Modifier.testTag("chat_attach_button")
+                    onClick = { showEmojiPicker = !showEmojiPicker },
+                    modifier = Modifier.testTag("chat_emoji_button")
                 ) {
-                    Icon(Icons.Default.AttachFile, contentDescription = "Attach Media", tint = WhatsGreen)
+                    Icon(
+                        imageVector = if (showEmojiPicker) Icons.Default.Close else Icons.Default.SentimentSatisfied,
+                        contentDescription = "Toggle Emojis",
+                        tint = WhatsGreen
+                    )
+                }
+
+                // Media attachment triggers option menu for gallery or simulated media
+                var showAttachmentOptions by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(
+                        onClick = { showAttachmentOptions = true },
+                        modifier = Modifier.testTag("chat_attach_button")
+                    ) {
+                        Icon(Icons.Default.AttachFile, contentDescription = "Attach Media", tint = WhatsGreen)
+                    }
+
+                    DropdownMenu(
+                        expanded = showAttachmentOptions,
+                        onDismissRequest = { showAttachmentOptions = false },
+                        modifier = Modifier.background(WhatsCardDark)
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("📷 Gallery Photo", color = Color.White) },
+                            onClick = {
+                                showAttachmentOptions = false
+                                galleryLauncher.launch("image/*")
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("🖼️ Simulated Photo Payload", color = Color.White) },
+                            onClick = {
+                                showAttachmentOptions = false
+                                viewModel.sendMessage(
+                                    chatId = chatId,
+                                    text = "Sent secure encrypted photo payload",
+                                    mediaUrl = "photo_url",
+                                    mediaType = "image"
+                                )
+                            }
+                        )
+                    }
                 }
 
                 TextField(
@@ -1491,6 +1789,7 @@ fun ChatFeedScreen(
                         if (textMessage.isNotBlank()) {
                             viewModel.sendMessage(chatId, textMessage)
                             textMessage = ""
+                            showEmojiPicker = false
                         }
                     },
                     containerColor = WhatsGreen,
@@ -1502,6 +1801,16 @@ fun ChatFeedScreen(
                 ) {
                     Icon(Icons.Default.Send, contentDescription = "Send", modifier = Modifier.size(20.dp))
                 }
+            }
+
+            // Inline Emoji Picker panel
+            if (showEmojiPicker) {
+                EmojiPickerGrid(
+                    onEmojiSelected = { emoji ->
+                        textMessage += emoji
+                    },
+                    onClose = { showEmojiPicker = false }
+                )
             }
         }
     }
@@ -1674,6 +1983,81 @@ fun VoiceCallOverlay(
                     .testTag("hangup_call_button")
             ) {
                 Icon(Icons.Default.CallEnd, contentDescription = "Hang Up")
+            }
+        }
+    }
+}
+
+@Composable
+fun EmojiPickerGrid(
+    onEmojiSelected: (String) -> Unit,
+    onClose: () -> Unit
+) {
+    val emojis = listOf(
+        "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😊", "😇", "🙂", "🙃", "😉", "😌", "😍", "🥰",
+        "😘", "😗", "😙", "😚", "😋", "😛", "😝", "😜", "🤪", "🤨", "🧐", "🤓", "😎", "🤩", "🥳", "😏",
+        "😒", "😞", "😔", "😟", "😕", "🙁", "☹️", "😣", "😖", "😫", "😩", "🥺", "😢", "😭", "😤", "😠",
+        "😡", "🤬", "🤯", "😳", "🥵", "🥶", "😱", "😨", "😰", "😥", "😓", "🤗", "🤔", "🤭", "🤫", "🤥",
+        "😐", "😑", "😬", "🙄", "😯", "😦", "😧", "😮", "😲", "🥱", "😴", "🤤", "😪", "😵", "🤐", "🥴",
+        "🤢", "🤮", "🤧", "😷", "🤒", "🤕", "🤑", "🤠", "😈", "👿", "👹", "👺", "🤡", "💩", "👻", "💀",
+        "👽", "👾", "🤖", "🎃", "👋", "👍", "👎", "👊", "✊", "✌️", "🤞", "🤟", "🤘", "👌", "🙏", "❤️",
+        "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "🤎", "💔", "🔥", "✨", "🎉", "🌟", "⭐", "⚡", "💥"
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(220.dp)
+            .background(WhatsCardDark)
+            .border(1.dp, WhatsBackground, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+            .padding(8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Select Emoji",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                modifier = Modifier.padding(start = 6.dp)
+            )
+            IconButton(
+                onClick = onClose,
+                modifier = Modifier.size(24.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Close Emoji Picker",
+                    tint = WhatsGrayText,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(38.dp),
+            modifier = Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            items(emojis) { emoji ->
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .clickable { onEmojiSelected(emoji) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = emoji,
+                        fontSize = 20.sp
+                    )
+                }
             }
         }
     }

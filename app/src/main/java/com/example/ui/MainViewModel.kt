@@ -2,6 +2,7 @@ package com.example.ui
 
 import com.example.BuildConfig
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
@@ -80,6 +81,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _biometricEnabled = MutableStateFlow(true)
     val biometricEnabled = _biometricEnabled.asStateFlow()
 
+    private val _notificationOnReceived = MutableStateFlow(sharedPrefs.getBoolean("notify_received", true))
+    val notificationOnReceived = _notificationOnReceived.asStateFlow()
+
+    private val _notificationOnSent = MutableStateFlow(sharedPrefs.getBoolean("notify_sent", false))
+    val notificationOnSent = _notificationOnSent.asStateFlow()
+
     // Active Calling State
     private val _activeCall = MutableStateFlow<CallLogEntity?>(null)
     val activeCall = _activeCall.asStateFlow()
@@ -132,6 +139,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         // Automatic link-up if cloud sync is pre-enabled
         val username = _currentUsername.value
+        if (!username.isNullOrBlank()) {
+            com.example.security.CryptoHelper.currentUsername = username
+        }
         val isCloudActive = _cloudSyncEnabled.value
         val savedCloudUrl = _cloudServerUrl.value
         if (isCloudActive && !username.isNullOrBlank()) {
@@ -233,12 +243,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val message = repository.sendEncryptedMessage(chatId, "me", "You", text, mediaUrl, mediaType)
 
+            // Trigger notification for sent message if enabled
+            if (_notificationOnSent.value) {
+                val displayBody = if (mediaType == "image") "📷 Photo" else if (mediaType == "audio") "🎵 Voice Note" else text
+                NotificationHelper.showMessageNotification(
+                    getApplication(),
+                    "You (Sent)",
+                    displayBody,
+                    chatId
+                )
+            }
+
             // If Cloud Sync is enabled, transmit payload over real-time WebSocket
             if (_cloudSyncEnabled.value && !_currentUsername.value.isNullOrBlank()) {
                 cloudSocketManager?.sendSecureMessage(
                     messageId = message.id,
                     chatId = message.chatId,
-                    senderId = "me",
+                    senderId = _currentUsername.value ?: "me",
                     senderName = _currentUsername.value ?: "You",
                     ciphertext = message.ciphertext,
                     iv = message.iv,
@@ -574,6 +595,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(Dispatchers.Main) {
                     _currentUserEmail.value = trimmedEmail
                     _currentUsername.value = trimmedUsername
+                    com.example.security.CryptoHelper.currentUsername = trimmedUsername
                     _cloudServerUrl.value = cloudUrl.trim()
                     _cloudSyncEnabled.value = useCloudServer
                     _isRegistered.value = true
@@ -588,6 +610,95 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     onResult(false, e.message ?: "An unexpected error occurred during registration.")
+                }
+            }
+        }
+    }
+
+    /**
+     * Create a secure direct E2EE chat with another user username.
+     * Optionally queries the cloud database to find and exchange their actual public key.
+     */
+    fun createDirectChat(contactUsername: String, onResult: (Boolean, String?) -> Unit) {
+        val trimmed = contactUsername.trim().lowercase()
+        if (trimmed.length < 3) {
+            onResult(false, "Username must be at least 3 characters.")
+            return
+        }
+        if (trimmed == _currentUsername.value?.lowercase()) {
+            onResult(false, "You cannot chat with yourself.")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            // First check if the chat already exists
+            val existingChat = repository.getChatById(trimmed)
+            if (existingChat != null) {
+                withContext(Dispatchers.Main) {
+                    onResult(true, "Chat already exists!")
+                }
+                return@launch
+            }
+
+            var contactName = contactUsername.trim()
+            var publicKey = "RSA-PUB-KEY-${trimmed.uppercase()}"
+            if (_cloudSyncEnabled.value && !_cloudServerUrl.value.isNullOrBlank()) {
+                try {
+                    val client = OkHttpClient()
+                    val formattedUrl = if (_cloudServerUrl.value.endsWith("/")) _cloudServerUrl.value.dropLast(1) else _cloudServerUrl.value
+                    val request = Request.Builder()
+                        .url("$formattedUrl/api/users/$trimmed")
+                        .build()
+                    client.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val bodyStr = response.body?.string()
+                            if (!bodyStr.isNullOrBlank()) {
+                                val userObj = JSONObject(bodyStr)
+                                contactName = userObj.optString("username", contactUsername)
+                                val pub = userObj.optString("publicKey", "")
+                                if (pub.isNotBlank()) {
+                                    publicKey = pub
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Could not fetch user key from cloud: ${e.message}")
+                }
+            }
+
+            try {
+                // Insert User Entity
+                val userEntity = UserEntity(
+                    id = trimmed,
+                    name = contactName,
+                    avatarUrl = "img_profile_avatar",
+                    publicKey = publicKey,
+                    isMe = false
+                )
+                repository.insertUser(userEntity)
+
+                // Insert Chat Entity
+                val chatEntity = ChatEntity(
+                    id = trimmed,
+                    name = contactName,
+                    isGroup = false,
+                    avatarUrl = "img_profile_avatar",
+                    groupOwnerId = null,
+                    lastMessageText = "Secure E2EE chat initiated. Direct keys exchanged!",
+                    lastMessageTimestamp = System.currentTimeMillis(),
+                    unreadCount = 0
+                )
+                repository.insertChat(chatEntity)
+
+                // Send a helper system message
+                repository.sendEncryptedMessage(trimmed, trimmed, contactName, "Secure E2EE channel opened. Greetings!")
+
+                withContext(Dispatchers.Main) {
+                    onResult(true, null)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    onResult(false, e.message ?: "Failed to create chat locally.")
                 }
             }
         }
@@ -609,6 +720,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             cloudSocketManager?.disconnect()
         }
+    }
+
+    fun updateNotificationSettings(received: Boolean, sent: Boolean) {
+        sharedPrefs.edit()
+            .putBoolean("notify_received", received)
+            .putBoolean("notify_sent", sent)
+            .apply()
+        _notificationOnReceived.value = received
+        _notificationOnSent.value = sent
     }
 
     override fun onCleared() {

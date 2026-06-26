@@ -144,7 +144,7 @@ class CloudSocketManager(
             if (type == "receive_message") {
                 val data = json.getJSONObject("data")
                 val messageId = data.getString("messageId")
-                val chatId = data.getString("chatId")
+                var chatId = data.getString("chatId")
                 val senderId = data.getString("senderId")
                 val senderName = data.getString("senderName")
                 val ciphertext = data.getString("ciphertext")
@@ -152,6 +152,16 @@ class CloudSocketManager(
                 val mediaUrl = data.optString("mediaUrl", null).let { if (it == "null" || it.isEmpty()) null else it }
                 val mediaType = data.optString("mediaType", null).let { if (it == "null" || it.isEmpty()) null else it }
                 val timestamp = data.optLong("timestamp", System.currentTimeMillis())
+
+                // Skip if message was sent by the current device
+                if (senderId.lowercase() == currentUsername || senderId == "me") {
+                    return
+                }
+
+                // If this is a direct/one-on-one message (not group), override chatId to be the sender's ID
+                if (!chatId.startsWith("group") && senderId.isNotEmpty()) {
+                    chatId = senderId
+                }
 
                 connectionScope.launch {
                     // Check if message is already in database
@@ -211,13 +221,25 @@ class CloudSocketManager(
                         )
                         chatDao.insertMessage(messageEntity)
 
-                        // Trigger notifications
-                        NotificationHelper.showMessageNotification(
-                            application,
-                            senderName,
-                            "Received secure E2EE message",
-                            chatId
-                        )
+                        // Trigger notifications based on preferences
+                        val sharedPrefs = application.getSharedPreferences("whatschat_prefs", android.content.Context.MODE_PRIVATE)
+                        val notifyReceived = sharedPrefs.getBoolean("notify_received", true)
+                        if (notifyReceived) {
+                            val decryptedText = try {
+                                val secretKey = com.example.security.CryptoHelper.getChatSecretKey(chatId)
+                                com.example.security.CryptoHelper.decrypt(ciphertext, iv, secretKey)
+                            } catch (e: Exception) {
+                                "Received secure E2EE message"
+                            }
+                            val displayBody = if (mediaType == "image") "📷 Photo" else if (mediaType == "audio") "🎵 Voice Note" else decryptedText
+
+                            NotificationHelper.showMessageNotification(
+                                application,
+                                senderName,
+                                displayBody,
+                                chatId
+                            )
+                        }
                     }
                 }
             } else if (type == "presence_change") {
