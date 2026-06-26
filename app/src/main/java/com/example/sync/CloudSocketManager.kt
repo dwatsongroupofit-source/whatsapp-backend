@@ -1,6 +1,7 @@
 package com.example.sync
 
 import android.app.Application
+import android.net.Uri
 import android.util.Log
 import com.example.data.*
 import com.example.sync.NotificationHelper
@@ -13,7 +14,8 @@ import java.util.concurrent.TimeUnit
 
 class CloudSocketManager(
     private val application: Application,
-    private val chatDao: ChatDao
+    private val chatDao: ChatDao,
+    private val activeChatIdProvider: () -> String? = { null }
 ) {
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS) // Keep connection alive indefinitely
@@ -29,6 +31,8 @@ class CloudSocketManager(
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState = _connectionState.asStateFlow()
+
+    var onCallSignalReceived: ((callId: String, senderId: String, senderName: String, action: String, chatId: String) -> Unit)? = null
 
     enum class ConnectionState {
         DISCONNECTED,
@@ -206,7 +210,23 @@ class CloudSocketManager(
                             )
                         }
 
-                        // Insert message
+                        // Decode Base64 media payload if present
+                        val finalMediaUrl = if (mediaUrl != null && mediaUrl.startsWith("base64:")) {
+                            val decodedFile = com.example.security.MediaTransferHelper.decodePayloadToLocalCache(application, mediaUrl)
+                            if (decodedFile != null) {
+                                Uri.fromFile(decodedFile).toString()
+                            } else {
+                                null
+                            }
+                        } else {
+                            mediaUrl
+                        }
+
+                        // Check if this chat is currently open on-screen
+                        val currentActiveChatId = activeChatIdProvider()
+                        val initialStatus = if (currentActiveChatId == chatId) "read" else "delivered"
+
+                        // Insert message with dynamic status locally
                         val messageEntity = MessageEntity(
                             id = messageId,
                             chatId = chatId,
@@ -216,10 +236,14 @@ class CloudSocketManager(
                             iv = iv,
                             isEncrypted = true,
                             timestamp = timestamp,
-                            mediaUrl = mediaUrl,
-                            mediaType = mediaType
+                            mediaUrl = finalMediaUrl,
+                            mediaType = mediaType,
+                            status = initialStatus
                         )
                         chatDao.insertMessage(messageEntity)
+
+                        // Send receipt feedback (either 'delivered' or 'read') back to the sender
+                        sendStatusUpdate(messageId, chatId, initialStatus)
 
                         // Trigger notifications based on preferences
                         val sharedPrefs = application.getSharedPreferences("whatschat_prefs", android.content.Context.MODE_PRIVATE)
@@ -242,11 +266,28 @@ class CloudSocketManager(
                         }
                     }
                 }
+            } else if (type == "message_status_update") {
+                val data = json.getJSONObject("data")
+                val messageId = data.getString("messageId")
+                val status = data.getString("status")
+                connectionScope.launch {
+                    chatDao.updateMessageStatus(messageId, status)
+                    Log.d("CloudSocketManager", "Updated message $messageId status to $status from socket update")
+                }
             } else if (type == "presence_change") {
                 val data = json.getJSONObject("data")
                 val username = data.getString("username")
                 val isOnline = data.getBoolean("isOnline")
                 Log.d("CloudSocketManager", "Contact @$username online status changed: $isOnline")
+            } else if (type == "call_signal") {
+                val data = json.getJSONObject("data")
+                val callId = data.getString("callId")
+                val senderId = data.getString("senderId")
+                val senderName = data.getString("senderName")
+                val action = data.getString("action")
+                val chatId = data.getString("chatId")
+                Log.d("CloudSocketManager", "Received call signal: action=$action from $senderId for call=$callId")
+                onCallSignalReceived?.invoke(callId, senderId, senderName, action, chatId)
             }
         } catch (e: Exception) {
             Log.e("CloudSocketManager", "Error parsing incoming raw WebSocket packet", e)
@@ -292,6 +333,61 @@ class CloudSocketManager(
             Log.d("CloudSocketManager", "Sent secure message over WebSocket: $messageId")
         } catch (e: Exception) {
             Log.e("CloudSocketManager", "Failed to construct or transmit secure message packet", e)
+        }
+    }
+
+    fun sendStatusUpdate(messageId: String, chatId: String, status: String) {
+        val socket = webSocket
+        if (socket == null || _connectionState.value != ConnectionState.CONNECTED) {
+            Log.e("CloudSocketManager", "Cannot send status update: WebSocket is not active.")
+            return
+        }
+
+        try {
+            val statusData = JSONObject().apply {
+                put("messageId", messageId)
+                put("chatId", chatId)
+                put("status", status)
+            }
+
+            val packet = JSONObject().apply {
+                put("type", "message_status_update")
+                put("data", statusData)
+            }
+
+            socket.send(packet.toString())
+            Log.d("CloudSocketManager", "Sent status update: $messageId -> $status")
+        } catch (e: Exception) {
+            Log.e("CloudSocketManager", "Failed to send status update over WebSocket", e)
+        }
+    }
+
+    fun sendCallSignal(callId: String, chatId: String, senderId: String, senderName: String, action: String, receiverId: String) {
+        val socket = webSocket
+        if (socket == null || _connectionState.value != ConnectionState.CONNECTED) {
+            Log.e("CloudSocketManager", "Cannot send call signal: WebSocket is not active.")
+            return
+        }
+
+        try {
+            val callData = JSONObject().apply {
+                put("callId", callId)
+                put("chatId", chatId)
+                put("senderId", senderId)
+                put("senderName", senderName)
+                put("action", action)
+                put("receiverId", receiverId)
+            }
+
+            val packet = JSONObject().apply {
+                put("type", "call_signal")
+                put("data", callData)
+            }
+
+            socket.send(packet.toString())
+            Log.d("CloudSocketManager", "Sent call signal action=$action to receiverId=$receiverId")
+        } catch (e: Exception) {
+            Log.e("CloudSocketManager", "Failed to send call signal over WebSocket", e)
         }
     }
 }

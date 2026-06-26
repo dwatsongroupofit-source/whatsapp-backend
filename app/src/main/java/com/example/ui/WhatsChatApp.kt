@@ -1496,16 +1496,25 @@ fun ChatFeedScreen(
     val allChats by viewModel.allChats.collectAsStateWithLifecycle()
     val chat = allChats.firstOrNull { it.id == chatId }
 
+    val context = LocalContext.current
+
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            viewModel.sendMessage(
-                chatId = chatId,
-                text = "Sent secure encrypted photo from gallery 📷",
-                mediaUrl = uri.toString(),
-                mediaType = "image"
-            )
+            val fileName = getFileNameFromUri(context, uri)
+            val mimeType = context.contentResolver.getType(uri)
+            viewModel.sendMediaUri(chatId, uri, fileName, mimeType)
+        }
+    }
+
+    val documentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val fileName = getFileNameFromUri(context, uri)
+            val mimeType = context.contentResolver.getType(uri)
+            viewModel.sendMediaUri(chatId, uri, fileName, mimeType)
         }
     }
 
@@ -1641,16 +1650,16 @@ fun ChatFeedScreen(
                                 }
 
                                 if (msg.mediaUrl != null) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(180.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(Color(0xFF1F2C34))
-                                            .padding(bottom = 6.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        if (msg.mediaType == "image") {
+                                    if (msg.mediaType == "image") {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(180.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(Color(0xFF1F2C34))
+                                                .padding(bottom = 6.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
                                             val modelToLoad = if (msg.mediaUrl == "photo_url") {
                                                 "https://picsum.photos/seed/${msg.id}/400/300"
                                             } else {
@@ -1663,7 +1672,76 @@ fun ChatFeedScreen(
                                                 contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                                                 error = androidx.compose.ui.res.painterResource(android.R.drawable.ic_menu_gallery)
                                             )
-                                        } else {
+                                        }
+                                    } else if (msg.mediaType == "pdf" || msg.mediaType == "ppt" || msg.mediaType == "document") {
+                                        // Interactive secure document card
+                                        val displayIcon = Icons.Default.Lock
+                                        val iconColor = when (msg.mediaType) {
+                                            "pdf" -> Color(0xFFEF5350) // Red
+                                            "ppt" -> Color(0xFFFF9800) // Orange
+                                            else -> Color(0xFF42A5F5) // Blue
+                                        }
+                                        val labelText = when (msg.mediaType) {
+                                            "pdf" -> "Decrypted PDF Document"
+                                            "ppt" -> "Decrypted PPT Slideshow"
+                                            else -> "Decrypted Document File"
+                                        }
+                                        val displayName = msg.mediaUrl.substringAfterLast("/")
+                                        
+                                        Card(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(bottom = 6.dp)
+                                                .clickable { openDocumentFile(context, msg.mediaUrl) },
+                                            colors = CardDefaults.cardColors(containerColor = Color(0xFF111B21)),
+                                            shape = RoundedCornerShape(8.dp),
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF202C33))
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(10.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    imageVector = displayIcon,
+                                                    contentDescription = "Document type",
+                                                    tint = iconColor,
+                                                    modifier = Modifier.size(32.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(12.dp))
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = displayName,
+                                                        color = Color.White,
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 12.sp,
+                                                        maxLines = 1,
+                                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                                    )
+                                                    Text(
+                                                        text = labelText,
+                                                        color = WhatsGrayText,
+                                                        fontSize = 10.sp
+                                                    )
+                                                }
+                                                Icon(
+                                                    imageVector = Icons.Default.Send, // Represents action to view/open
+                                                    contentDescription = "Open Document",
+                                                    tint = WhatsGreen,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        // Voice Note / Audio
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(64.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(Color(0xFF1F2C34))
+                                                .padding(bottom = 6.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
                                             Icon(
                                                 imageVector = Icons.Default.Mic,
                                                 contentDescription = "Media attachment",
@@ -1693,13 +1771,46 @@ fun ChatFeedScreen(
                                         fontSize = 10.sp,
                                         color = WhatsGrayText
                                     )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Icon(
-                                        imageVector = Icons.Default.Lock,
-                                        contentDescription = "E2EE Secured",
-                                        tint = WhatsGreen,
-                                        modifier = Modifier.size(10.dp)
-                                    )
+                                    if (isMe) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        val tickColor = if (msg.status == "read") Color.Red else WhatsGrayText
+                                        if (msg.status == "sent") {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = "Sent",
+                                                tint = tickColor,
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                        } else {
+                                            Box(
+                                                contentAlignment = Alignment.CenterStart,
+                                                modifier = Modifier.width(18.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = tickColor,
+                                                    modifier = Modifier.size(13.dp)
+                                                )
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = if (msg.status == "read") "Seen" else "Delivered",
+                                                    tint = tickColor,
+                                                    modifier = Modifier
+                                                        .size(13.dp)
+                                                        .padding(start = 4.dp)
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.Lock,
+                                            contentDescription = "E2EE Secured",
+                                            tint = WhatsGreen,
+                                            modifier = Modifier.size(10.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1747,6 +1858,13 @@ fun ChatFeedScreen(
                             onClick = {
                                 showAttachmentOptions = false
                                 galleryLauncher.launch("image/*")
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("📄 Share Document / PPT / PDF", color = Color.White) },
+                            onClick = {
+                                showAttachmentOptions = false
+                                documentLauncher.launch("*/*")
                             }
                         )
                         DropdownMenuItem(
@@ -2060,5 +2178,51 @@ fun EmojiPickerGrid(
                 }
             }
         }
+    }
+}
+
+fun getFileNameFromUri(context: android.content.Context, uri: Uri): String {
+    var name = ""
+    try {
+        val cursor = context.contentResolver.query(uri, null, null, null, null)
+        cursor?.use {
+            if (it.moveToFirst()) {
+                val displayNameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (displayNameIndex != -1) {
+                    name = it.getString(displayNameIndex)
+                }
+            }
+        }
+    } catch (e: Exception) {
+        // Fallback
+    }
+    if (name.isEmpty()) {
+        name = uri.lastPathSegment ?: "file"
+    }
+    return name
+}
+
+fun openDocumentFile(context: android.content.Context, fileUriStr: String) {
+    try {
+        val uri = Uri.parse(fileUriStr)
+        val secureUri = if (uri.scheme == "file") {
+            val file = java.io.File(uri.path ?: "")
+            androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.provider",
+                file
+            )
+        } else {
+            uri
+        }
+
+        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+            setDataAndType(secureUri, context.contentResolver.getType(secureUri) ?: "*/*")
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        android.widget.Toast.makeText(context, "Could not open document: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
     }
 }

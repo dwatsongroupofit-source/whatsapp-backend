@@ -42,6 +42,15 @@ interface ChatDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: MessageEntity)
 
+    @Query("UPDATE messages SET status = :status WHERE id = :id")
+    suspend fun updateMessageStatus(id: String, status: String)
+
+    @Query("UPDATE messages SET status = 'read', isRead = 1 WHERE chatId = :chatId AND senderId != 'me' AND status != 'read'")
+    suspend fun markIncomingMessagesAsRead(chatId: String)
+
+    @Query("SELECT * FROM messages WHERE chatId = :chatId AND senderId != 'me' AND status != 'read'")
+    suspend fun getUnreadIncomingMessages(chatId: String): List<MessageEntity>
+
     @Query("DELETE FROM messages WHERE chatId = :chatId")
     suspend fun deleteMessagesForChat(chatId: String)
 
@@ -74,7 +83,7 @@ interface ChatDao {
         StatusEntity::class,
         CallLogEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

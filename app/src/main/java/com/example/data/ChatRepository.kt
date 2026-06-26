@@ -82,4 +82,16 @@ class ChatRepository(private val chatDao: ChatDao) {
 
     suspend fun getChatById(chatId: String): ChatEntity? = chatDao.getChatById(chatId)
     suspend fun getUserById(userId: String): UserEntity? = chatDao.getUserById(userId)
+
+    suspend fun updateMessageStatus(id: String, status: String) {
+        chatDao.updateMessageStatus(id, status)
+    }
+
+    suspend fun markIncomingMessagesAsRead(chatId: String) {
+        chatDao.markIncomingMessagesAsRead(chatId)
+    }
+
+    suspend fun getUnreadIncomingMessages(chatId: String): List<MessageEntity> {
+        return chatDao.getUnreadIncomingMessages(chatId)
+    }
 }

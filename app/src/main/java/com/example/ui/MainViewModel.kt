@@ -2,6 +2,7 @@ package com.example.ui
 
 import com.example.BuildConfig
 import android.app.Application
+import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -128,7 +129,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
         // Initialize Cloud Client Manager
-        cloudSocketManager = CloudSocketManager(application, database.chatDao())
+        cloudSocketManager = CloudSocketManager(application, database.chatDao()) { _selectedChatId.value }
         
         // Flow the connection state to the UI Flow
         viewModelScope.launch {
@@ -216,6 +217,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectChat(chatId: String?) {
         _selectedChatId.value = chatId
+        if (chatId != null) {
+            markChatAsRead(chatId)
+        }
+    }
+
+    fun markChatAsRead(chatId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val unreadMessages = repository.getUnreadIncomingMessages(chatId)
+            repository.markIncomingMessagesAsRead(chatId)
+            if (_cloudSyncEnabled.value) {
+                unreadMessages.forEach { msg ->
+                    cloudSocketManager?.sendStatusUpdate(msg.id, chatId, "read")
+                }
+            }
+        }
     }
 
     fun unlockApp() {
@@ -234,6 +250,99 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun decryptMessage(message: MessageEntity): String {
         return repository.decryptMessage(message)
+    }
+
+    /**
+     * Send selected media Uri (image, pdf, ppt, document) securely.
+     * Copied to local cache first for local preview, then converted to a Base64-embedded payload for transmission.
+     */
+    fun sendMediaUri(chatId: String, uri: Uri, fileName: String, mimeType: String?) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<android.app.Application>()
+            
+            // 1. Copy selected content URI to local app cache (clean local file path)
+            val localFile = com.example.security.MediaTransferHelper.copyUriToLocalCache(context, uri, fileName) ?: return@launch
+            val localFileUriString = Uri.fromFile(localFile).toString()
+            
+            // Determine media type
+            val ext = localFile.extension.lowercase()
+            val isImage = mimeType?.startsWith("image/") == true || ext in listOf("jpg", "jpeg", "png", "gif", "webp")
+            val mediaType = when {
+                isImage -> "image"
+                ext == "pdf" -> "pdf"
+                ext in listOf("ppt", "pptx") -> "ppt"
+                else -> "document"
+            }
+            
+            // 2. Convert to Base64 payload for transmission
+            val base64Payload = com.example.security.MediaTransferHelper.fileToBase64Payload(localFile, isImage) ?: return@launch
+            
+            // 3. Save message locally with local lightweight URI
+            val plainText = if (isImage) {
+                "Sent secure encrypted photo 📷"
+            } else {
+                "Sent secure document: $fileName 📄"
+            }
+            
+            val message = repository.sendEncryptedMessage(
+                chatId = chatId,
+                senderId = "me",
+                senderName = "You",
+                plainText = plainText,
+                mediaUrl = localFileUriString, // Local file path for local display
+                mediaType = mediaType
+            )
+            
+            // Trigger notification if enabled
+            if (_notificationOnSent.value) {
+                val displayBody = if (mediaType == "image") "📷 Photo" else "📄 Document: $fileName"
+                NotificationHelper.showMessageNotification(
+                    context,
+                    "You (Sent)",
+                    displayBody,
+                    chatId
+                )
+            }
+            
+            // 4. Send over Cloud Sync Socket if active, using the Base64 payload as mediaUrl
+            if (_cloudSyncEnabled.value && !_currentUsername.value.isNullOrBlank()) {
+                cloudSocketManager?.sendSecureMessage(
+                    messageId = message.id,
+                    chatId = message.chatId,
+                    senderId = _currentUsername.value ?: "me",
+                    senderName = _currentUsername.value ?: "You",
+                    ciphertext = message.ciphertext,
+                    iv = message.iv,
+                    mediaUrl = base64Payload, // Send the Base64 payload!
+                    mediaType = message.mediaType,
+                    timestamp = message.timestamp
+                )
+            } else {
+                // Simulated auto reply and status transitions if cloud mode is offline
+                delay(400)
+                repository.updateMessageStatus(message.id, "delivered")
+                delay(600)
+                repository.updateMessageStatus(message.id, "read")
+                delay(500)
+                val chat = repository.getChatById(chatId) ?: return@launch
+                val responderName = if (chat.isGroup) "Alice" else chat.name
+                val responderId = if (chat.isGroup) "alice" else chat.id
+                
+                val replyText = if (mediaType == "image") {
+                    "That's a beautiful photo! Decrypted successfully on my end."
+                } else {
+                    "Received your document '$fileName' ($ext). Decrypted and verified successfully!"
+                }
+                
+                repository.sendEncryptedMessage(chatId, responderId, responderName, replyText)
+                NotificationHelper.showMessageNotification(
+                    context,
+                    responderName,
+                    replyText,
+                    chatId
+                )
+            }
+        }
     }
 
     /**
@@ -268,8 +377,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     timestamp = message.timestamp
                 )
             } else {
-                // Auto simulated answer (only if cloud mode is disabled)
-                delay(1500)
+                // Auto simulated answer with status transitions (only if cloud mode is disabled)
+                delay(400)
+                repository.updateMessageStatus(message.id, "delivered")
+                delay(600)
+                repository.updateMessageStatus(message.id, "read")
+                delay(500)
                 val chat = repository.getChatById(chatId) ?: return@launch
                 val responderName = if (chat.isGroup) "Alice" else chat.name
                 val responderId = if (chat.isGroup) "alice" else chat.id

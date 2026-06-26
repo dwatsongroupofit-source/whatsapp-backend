@@ -94,7 +94,8 @@ const messageSchema = new mongoose.Schema({
   isEncrypted: { type: Boolean, default: true },
   mediaUrl: { type: String, default: null },
   mediaType: { type: String, default: null },
-  timestamp: { type: Number, required: true }
+  timestamp: { type: Number, required: true },
+  status: { type: String, default: 'sent' }
 });
 
 const chatSchema = new mongoose.Schema({
@@ -420,6 +421,46 @@ wss.on('connection', (ws, request) => {
         });
 
         console.log(`[WS] Routed secure E2EE packet correctly from @${senderId} over Raw WS channel`);
+      } else if (packet.type === 'message_status_update') {
+        const statusData = packet.data;
+        const { messageId, chatId, status } = statusData;
+
+        if (messageId && status) {
+          // Update message status in MongoDB
+          await Message.findOneAndUpdate({ messageId }, { status });
+
+          // Relay status update packet to all other online raw WebSocket client devices
+          const relayPacket = JSON.stringify({
+            type: 'message_status_update',
+            data: { messageId, chatId, status }
+          });
+
+          rawClients.forEach((clientWs, clientUsername) => {
+            if (clientUsername !== username && clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(relayPacket);
+            }
+          });
+
+          console.log(`[WS] Relayed message status update: messageId=${messageId} status=${status}`);
+        }
+      } else if (packet.type === 'call_signal') {
+        const callData = packet.data;
+        const { receiverId } = callData;
+
+        if (receiverId) {
+          const relayPacket = JSON.stringify({
+            type: 'call_signal',
+            data: callData
+          });
+
+          rawClients.forEach((clientWs, clientUsername) => {
+            if (clientUsername === receiverId.toLowerCase().trim() && clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(relayPacket);
+            }
+          });
+
+          console.log(`[WS] Relayed call signal: action=${callData.action} from ${username} to ${receiverId}`);
+        }
       }
     } catch (err) {
       console.error('[WS] Failed to parse raw message packet:', err.message);

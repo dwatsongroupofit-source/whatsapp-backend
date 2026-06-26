@@ -36,7 +36,8 @@ data class MessageEntity(
     val timestamp: Long = System.currentTimeMillis(),
     val mediaUrl: String? = null,
     val mediaType: String? = null, // "image", "audio", "document"
-    val isRead: Boolean = false
+    val isRead: Boolean = false,
+    val status: String = "sent" // "sent", "delivered", "read"
 )
 
 @Entity(tableName = "statuses")
